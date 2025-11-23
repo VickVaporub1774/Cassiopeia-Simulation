@@ -1,0 +1,402 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulación 3D de Casiopea | Ángel Reynoso</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            background: #000;
+        }
+        canvas {
+            display: block;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 5px;
+            font-size: 14px;
+            max-width: 300px;
+        }
+        #controls {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            color: white;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 15px;
+            border-radius: 5px;
+            font-size: 12px;
+        }
+        button {
+            background: #1a5490;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            margin: 5px;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #2d6db5;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h3 style="margin-top: 0;">Constelación de Casiopea</h3>
+        <div id="starInfo">Viendo desde la Tierra</div>
+        <div style="margin-top: 10px; font-size: 11px;">
+            Hecho por: Ángel Reynoso
+        </div>
+    </div>
+    <div id="controls">
+        <strong>Controles:</strong><br>
+        Arrastrar ratón: Rotar vista<br>
+        W/S: Avanzar/retroceder<br>
+        A/D: Moverse izquierda/derecha<br>
+        Q/E: Subir/bajar<br>
+        Shift: Moverse más rápido<br>
+        <button onclick="resetCamera()">Volver a la Tierra</button>
+        <button onclick="toggleLines()">Alternar líneas</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Cassiopeia star data with actual sizes (solar radii) and distances (light-years)
+        const cassiopeiaStars = [
+            { name: "Caph (β Cas)", distance: 54.7, radius: 3.5, temp: 7079, ra: 0.153, dec: 59.15 },
+            { name: "Schedar (α Cas)", distance: 228, radius: 42, temp: 4530, ra: 0.675, dec: 56.54 },
+            
+            { name: "Gamma Cas (γ Cas)", distance: 550, radius: 10, temp: 25000, ra: 0.945, dec: 60.72 },
+            { name: "Ruchbah (δ Cas)", distance: 99.4, radius: 4, temp: 8400, ra: 1.430, dec: 60.24 },
+            { name: "Segin (ε Cas)", distance: 442, radius: 6.5, temp: 15174, ra: 1.906, dec: 63.67 }
+        ];
+
+        // Physical constants
+        const EARTH_RADIUS_KM = 6371;
+        const SUN_RADIUS_KM = 696000;
+        const LY_TO_KM = 9.461e12;
+        
+        // Visualization scale
+        // We'll use 1 unit = 10 light-years for distances
+        // And exaggerate star sizes so they're visible (but keep relative proportions)
+        const DISTANCE_SCALE = 10; // Increased scale by 100x (1 unit = 0.1 ly)
+        const SIZE_SCALE = 500000; // Increased size scale by 100x
+        
+        // Earth size in scene units
+        const earthRadius = (EARTH_RADIUS_KM / LY_TO_KM) * DISTANCE_SCALE * SIZE_SCALE;
+
+        // Get star color from temperature
+        function getStarColor(temp) {
+            if (temp < 3700) return 0xff4500;
+            if (temp < 5200) return 0xffaa77;
+            if (temp < 6000) return 0xfff4e8;
+            if (temp < 7500) return 0xffffee;
+            if (temp < 10000) return 0xcce0ff;
+            if (temp < 30000) return 0x88bbff;
+            return 0xaaccff;
+        }
+
+        // Convert RA/Dec to Cartesian coordinates
+        function raDecToCartesian(ra, dec, distance) {
+            const raRad = ra * 15 * Math.PI / 180;
+            const decRad = dec * Math.PI / 180;
+            
+            const x = distance * Math.cos(decRad) * Math.cos(raRad);
+            const y = distance * Math.cos(decRad) * Math.sin(raRad);
+            const z = distance * Math.sin(decRad);
+            
+            return { 
+                x: x * DISTANCE_SCALE, 
+                y: y * DISTANCE_SCALE, 
+                z: z * DISTANCE_SCALE 
+            };
+        }
+
+        // Setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.001, 10000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Add stars background
+        const starsGeometry = new THREE.BufferGeometry();
+        const starVertices = [];
+        for (let i = 0; i < 5000; i++) {
+            // Create stars in a spherical shell from 1000 to 8000 units away
+            const distance = 1000 + Math.random() * 7000;
+            const theta = Math.random() * Math.PI * 2; // Azimuth
+            const phi = Math.acos(2 * Math.random() - 1); // Polar angle for uniform distribution
+            
+            const x = distance * Math.sin(phi) * Math.cos(theta);
+            const y = distance * Math.sin(phi) * Math.sin(theta);
+            const z = distance * Math.cos(phi);
+            starVertices.push(x, y, z);
+        }
+        starsGeometry.setAttribute('position', new THREE.Float32BufferAttribute(starVertices, 3));
+        const starsMaterial = new THREE.PointsMaterial({ color: 0x888888, size: 0.1 });
+        const starField = new THREE.Points(starsGeometry, starsMaterial);
+        scene.add(starField);
+
+        // Create Earth with texture
+        const earthGeometry = new THREE.SphereGeometry(earthRadius, 32, 32);
+        
+        // Create a simple Earth texture procedurally
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 512;
+        const ctx = canvas.getContext('2d');
+        
+        // Ocean base
+        ctx.fillStyle = '#1a4d80';
+        ctx.fillRect(0, 0, 512, 512);
+        
+        // Add some continents (simplified)
+        ctx.fillStyle = '#2d5a2d';
+        ctx.beginPath();
+        ctx.arc(150, 256, 80, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillRect(250, 150, 120, 100);
+        ctx.fillRect(320, 280, 90, 80);
+        
+        // Add polar ice caps
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 512, 30);
+        ctx.fillRect(0, 482, 512, 30);
+        
+        // Add clouds
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        for (let i = 0; i < 20; i++) {
+            ctx.beginPath();
+            ctx.arc(Math.random() * 512, Math.random() * 512, Math.random() * 30 + 10, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        
+        const earthTexture = new THREE.CanvasTexture(canvas);
+        const earthMaterial = new THREE.MeshBasicMaterial({ map: earthTexture });
+        const earth = new THREE.Mesh(earthGeometry, earthMaterial);
+        scene.add(earth);
+
+        // Add subtle Earth atmosphere glow
+        const glowGeometry = new THREE.SphereGeometry(earthRadius * 1.1, 32, 32);
+        const glowMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0x4466ff,
+            transparent: true,
+            opacity: 0.2
+        });
+        const earthGlow = new THREE.Mesh(glowGeometry, glowMaterial);
+        scene.add(earthGlow);
+
+        // Create Cassiopeia stars with accurate sizes
+        const starMeshes = [];
+        const starPositions = [];
+        
+        cassiopeiaStars.forEach((star, index) => {
+            const pos = raDecToCartesian(star.ra, star.dec, star.distance);
+            starPositions.push(pos);
+            
+            // Calculate star radius in scene units (solar radii to scene units)
+            const starRadiusScene = (star.radius * SUN_RADIUS_KM / LY_TO_KM) * DISTANCE_SCALE * SIZE_SCALE;
+            
+            // Create star sphere
+            const geometry = new THREE.SphereGeometry(starRadiusScene, 32, 32);
+            const color = getStarColor(star.temp);
+            const material = new THREE.MeshBasicMaterial({ color: color });
+            const starMesh = new THREE.Mesh(geometry, material);
+            starMesh.position.set(pos.x, pos.y, pos.z);
+            starMesh.userData = { 
+                name: star.name, 
+                distance: star.distance,
+                radius: star.radius 
+            };
+            scene.add(starMesh);
+            starMeshes.push(starMesh);
+            
+            // Add star glow
+            const glowGeom = new THREE.SphereGeometry(starRadiusScene * 2, 32, 32);
+            const glowMat = new THREE.MeshBasicMaterial({ 
+                color: color,
+                transparent: true,
+                opacity: 0.3
+            });
+            const glow = new THREE.Mesh(glowGeom, glowMat);
+            glow.position.set(pos.x, pos.y, pos.z);
+            scene.add(glow);
+
+            // Create an invisible hitbox for easier clicking
+            const hitboxGeometry = new THREE.SphereGeometry(starRadiusScene * 3, 8, 8); // 3x larger hitbox
+            const hitboxMaterial = new THREE.MeshBasicMaterial({ visible: false });
+            const hitbox = new THREE.Mesh(hitboxGeometry, hitboxMaterial);
+            hitbox.position.copy(starMesh.position);
+            hitbox.userData = starMesh.userData; // Copy star data to hitbox
+            scene.add(hitbox);
+            starMeshes.push(hitbox); // Add hitbox to raycasting targets
+        });
+
+        // Draw constellation lines
+        const lineMaterial = new THREE.LineBasicMaterial({ color: 0x00ffff, opacity: 0.5, transparent: true });
+        const connections = [[0,1], [1,2], [2,3], [3,4]];
+        
+        let linesVisible = true; // Track visibility of lines
+        const constellationLines = []; // Store references to the lines
+
+        connections.forEach(([i, j]) => {
+            const points = [
+                new THREE.Vector3(starPositions[i].x, starPositions[i].y, starPositions[i].z),
+                new THREE.Vector3(starPositions[j].x, starPositions[j].y, starPositions[j].z)
+            ];
+            const geometry = new THREE.BufferGeometry().setFromPoints(points);
+            const line = new THREE.Line(geometry, lineMaterial);
+            scene.add(line);
+            constellationLines.push(line); // Store line reference
+        });
+
+        // Camera setup - start at the desired Earth viewing position
+        camera.position.set(-0.009, 0.002, -0.005);
+        camera.lookAt(0.753, 0.030, 0.658);
+
+        // Camera controls
+        const moveSpeed = 1;
+        const slowSpeed = moveSpeed * 0.001; // Slow speed (1% of current speed)
+        const keys = {};
+        
+        // Euler angles for camera rotation - initialize with the correct starting rotation
+        let yaw = -131.2 * Math.PI / 180;   // Horizontal rotation (convert from degrees)
+        let pitch = 1.7 * Math.PI / 180;    // Vertical rotation (convert from degrees)
+        
+        document.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
+        document.addEventListener('keyup', (e) => keys[e.key.toLowerCase()] = false);
+
+        let isDragging = false;
+        let previousMouseX = 0;
+        let previousMouseY = 0;
+
+        renderer.domElement.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            previousMouseX = e.clientX;
+            previousMouseY = e.clientY;
+        });
+
+        document.addEventListener('mouseup', () => isDragging = false);
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            
+            const deltaX = e.clientX - previousMouseX;
+            const deltaY = e.clientY - previousMouseY;
+            
+            // Update yaw and pitch
+            yaw -= deltaX * 0.003;  // Horizontal rotation (negative for natural feel)
+            pitch -= deltaY * 0.003; // Vertical rotation (negative for natural feel)
+            
+            // Clamp pitch to prevent over-rotation
+            pitch = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, pitch));
+            
+            previousMouseX = e.clientX;
+            previousMouseY = e.clientY;
+        });
+
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        const starInfoDiv = document.createElement('div');
+        starInfoDiv.style.position = 'absolute';
+        starInfoDiv.style.color = 'white';
+        starInfoDiv.style.background = 'rgba(0, 0, 0, 0.7)';
+        starInfoDiv.style.padding = '10px';
+        starInfoDiv.style.borderRadius = '5px';
+        starInfoDiv.style.display = 'none';
+        document.body.appendChild(starInfoDiv);
+
+        renderer.domElement.addEventListener('click', (event) => {
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(starMeshes);
+
+            if (intersects.length > 0) {
+                const star = intersects[0].object.userData;
+                starInfoDiv.innerHTML = `<strong>${star.name}</strong><br>Distancia: ${star.distance} años luz<br>Radio: ${star.radius} radios solares`;
+                starInfoDiv.style.left = `${event.clientX + 10}px`;
+                starInfoDiv.style.top = `${event.clientY + 10}px`;
+                starInfoDiv.style.display = 'block';
+            } else {
+                starInfoDiv.style.display = 'none';
+            }
+        });
+
+        function resetCamera() {
+            // Set to the desired starting position and orientation
+            camera.position.set(-0.009, 0.002, -0.005);
+            camera.lookAt(0.753, 0.030, 0.658);
+            yaw = -131.2 * Math.PI / 180; // Convert degrees to radians
+            pitch = 1.7 * Math.PI / 180;  // Convert degrees to radians
+        }
+
+        function toggleLines() {
+            linesVisible = !linesVisible;
+            constellationLines.forEach(line => line.visible = linesVisible);
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Rotate Earth
+            earth.rotation.y += 0.001;
+            earthGlow.rotation.y += 0.001;
+
+            // Apply camera rotation using quaternions for smooth first-person control
+            camera.quaternion.setFromEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+            
+            // Camera movement - get directions after rotation is applied
+            const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+            const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+            const up = new THREE.Vector3(0, 1, 0);
+
+            const speed = keys['shift'] ? moveSpeed : slowSpeed; // Adjust speed based on Shift key
+
+            if (keys['w']) camera.position.addScaledVector(forward, speed);
+            if (keys['s']) camera.position.addScaledVector(forward, -speed);
+            if (keys['a']) camera.position.addScaledVector(right, -speed);
+            if (keys['d']) camera.position.addScaledVector(right, speed);
+            if (keys['q']) camera.position.addScaledVector(up, -speed);
+            if (keys['e']) camera.position.addScaledVector(up, speed);
+
+            // Update info
+            const dist = camera.position.length();
+            const distLightYears = dist / DISTANCE_SCALE;
+            const infoDiv = document.getElementById('starInfo');
+            
+            if (dist < 1) {
+                infoDiv.innerHTML = '<strong>Viendo desde la Tierra</strong><br>Observa la familiar forma de "W"<br><small>Radio terrestre: 6,371 km</small>';
+            } else {
+                infoDiv.innerHTML = `<strong>Vista de cámara libre</strong><br>Distancia: ${distLightYears.toFixed(1)} años luz desde la Tierra`;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        window.resetCamera = resetCamera;
+        window.toggleLines = toggleLines;
+    </script>
+</body>
+</html>
